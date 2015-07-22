@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using System.Diagnostics;
@@ -7,9 +8,11 @@ using System.Threading.Tasks;
 
 namespace LinqToDB.Data
 {
+#if !NOASYNC
+
 	public partial class DataConnection
 	{
-		internal async Task InitCommandAsync(CancellationToken cancellationToken)
+		internal async Task InitCommandAsync(CommandType commandType, string sql, DataParameter[] parameters, CancellationToken cancellationToken)
 		{
 			if (_connection == null)
 				_connection = DataProvider.CreateConnection(ConnectionString);
@@ -20,7 +23,7 @@ namespace LinqToDB.Data
 				_closeConnection = true;
 			}
 
-			InitCommand();
+			InitCommand(commandType, sql, parameters, null);
 		}
 
 		internal async Task<int> ExecuteNonQueryAsync(CancellationToken cancellationToken)
@@ -126,4 +129,6 @@ namespace LinqToDB.Data
 			}
 		}
 	}
+
+#endif
 }

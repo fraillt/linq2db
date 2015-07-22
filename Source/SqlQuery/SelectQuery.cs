@@ -140,7 +140,7 @@ namespace LinqToDB.SqlQuery
 
 				Parent     = parent;
 				Expression = expression;
-				_alias      = alias;
+				_alias     = alias;
 
 #if DEBUG
 				_columnNumber = ++_columnCounter;
@@ -187,7 +187,7 @@ namespace LinqToDB.SqlQuery
 
 			public bool Equals(Column other)
 			{
-				return Expression.Equals(other.Expression);
+				return Expression.Equals(other.Expression) && object.Equals(Parent, other.Parent);
 			}
 
 #if OVERRIDETOSTRING
@@ -3502,6 +3502,11 @@ namespace LinqToDB.SqlQuery
 
 			SourceID = Interlocked.Increment(ref SourceIDCounter);
 
+			ICloneableElement parentClone;
+
+			if (clone.ParentSelect != null)
+				ParentSelect = objectTree.TryGetValue(clone.ParentSelect, out parentClone) ? (SelectQuery)parentClone : clone.ParentSelect;
+
 			_queryType = clone._queryType;
 
 			if (IsInsert) _insert = (InsertClause)clone._insert.Clone(objectTree, doClone);
@@ -3560,7 +3565,7 @@ namespace LinqToDB.SqlQuery
 
 			var alias = desiredAlias;
 
-			if (string.IsNullOrEmpty(desiredAlias) || desiredAlias.Length > 30)
+			if (string.IsNullOrEmpty(desiredAlias) || desiredAlias.Length > 25)
 			{
 				desiredAlias = defaultAlias;
 				alias        = defaultAlias + "1";

@@ -83,16 +83,20 @@ namespace LinqToDB.DataProvider
 		public    abstract ISqlBuilder   CreateSqlBuilder();
 		public    abstract ISqlOptimizer GetSqlOptimizer ();
 
-		public virtual void InitCommand(DataConnection dataConnection)
+		public virtual void InitCommand(DataConnection dataConnection, CommandType commandType, string commandText, DataParameter[] parameters)
 		{
+			dataConnection.Command.CommandType = commandType;
+
 			if (dataConnection.Command.Parameters.Count != 0)
 				dataConnection.Command.Parameters.Clear();
+
+			dataConnection.Command.CommandText = commandText;
 		}
 
-        public virtual void PrepareCommandInfo(CommandInfo commandInfo)
-        {
-        }
-
+		public virtual void DisposeCommand(DataConnection dataConnection)
+		{
+			dataConnection.Command.Dispose();
+		}
 
 		public virtual object GetConnectionInfo(DataConnection dataConnection, string parameterName)
 		{
@@ -251,12 +255,8 @@ namespace LinqToDB.DataProvider
 			return type;
 		}
 
-		public abstract bool IsCompatibleConnection(IDbConnection connection);
-
-		public virtual ISchemaProvider GetSchemaProvider()
-		{
-			throw new NotImplementedException();
-		}
+		public abstract bool            IsCompatibleConnection(IDbConnection connection);
+		public abstract ISchemaProvider GetSchemaProvider     ();
 
 		protected virtual void SetParameterType(IDbDataParameter parameter, DataType dataType)
 		{

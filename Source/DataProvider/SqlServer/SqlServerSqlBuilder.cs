@@ -99,6 +99,30 @@ namespace LinqToDB.DataProvider.SqlServer
 			if (wrap) StringBuilder.Append(" THEN 1 ELSE 0 END");
 		}
 
+		protected override void BuildLikePredicate(SelectQuery.Predicate.Like predicate)
+		{
+			if (predicate.Expr2 is SqlValue)
+			{
+				var value = ((SqlValue)predicate.Expr2).Value;
+
+				if (value != null)
+				{
+					var text  = ((SqlValue)predicate.Expr2).Value.ToString();
+					var ntext = text.Replace("[", "[[]");
+
+					if (text != ntext)
+						predicate = new SelectQuery.Predicate.Like(predicate.Expr1, predicate.IsNot, new SqlValue(ntext), predicate.Escape);
+				}
+			}
+			else if (predicate.Expr2 is SqlParameter)
+			{
+				var p = ((SqlParameter)predicate.Expr2);
+				p.ReplaceLike = true;
+			}
+
+			base.BuildLikePredicate(predicate);
+		}
+
 		public override object Convert(object value, ConvertType convertType)
 		{
 			switch (convertType)
@@ -207,10 +231,12 @@ namespace LinqToDB.DataProvider.SqlServer
 
 #if !NETFX_CORE && !SILVERLIGHT
 
+#if !MONO
 		protected override string GetTypeName(IDbDataParameter parameter)
 		{
 			return ((System.Data.SqlClient.SqlParameter)parameter).TypeName;
 		}
+#endif
 
 		protected override string GetUdtTypeName(IDbDataParameter parameter)
 		{

@@ -10,7 +10,6 @@ namespace LinqToDB.Data
 {
 	using DataProvider;
 	using Linq;
-
 	using Mapping;
 	using SqlQuery;
 	using SqlProvider;
@@ -35,18 +34,19 @@ namespace LinqToDB.Data
 			return DataExtensions.GetTable<T>(this, instance, methodInfo, parameters);
 		}
 
-	    internal class PreparedQuery
+		internal class PreparedQuery
 		{
 			public string[]           Commands;
 			public List<SqlParameter> SqlParameters;
 			public IDbDataParameter[] Parameters;
 			public SelectQuery        SelectQuery;
 			public ISqlBuilder        SqlProvider;
+			public List<string>       QueryHints;
 		}
 
 		#region SetQuery
 
-		PreparedQuery GetCommand(IQueryContext query)
+		internal PreparedQuery GetCommand(IQueryContext query)
 		{
 			if (query.Context != null)
 			{
@@ -54,14 +54,15 @@ namespace LinqToDB.Data
 				{
 					Commands      = (string[])query.Context,
 					SqlParameters = query.SelectQuery.Parameters,
-					SelectQuery   = query.SelectQuery
+					SelectQuery   = query.SelectQuery,
+					QueryHints    = query.QueryHints,
 				 };
 			}
 
 			var sql    = query.SelectQuery.ProcessParameters();
 			var newSql = ProcessQuery(sql);
 
-			if (!ReferenceEquals(sql, newSql))
+			if (!object.ReferenceEquals(sql, newSql))
 			{
 				sql = newSql;
 				sql.IsParameterDependent = true;
@@ -90,7 +91,8 @@ namespace LinqToDB.Data
 				Commands      = commands,
 				SqlParameters = sql.Parameters,
 				SelectQuery   = sql,
-				SqlProvider   = sqlProvider
+				SqlProvider   = sqlProvider,
+				QueryHints    = query.QueryHints,
 			};
 		}
 
@@ -118,7 +120,7 @@ namespace LinqToDB.Data
 
 					if (sqlp.IsQueryParameter)
 					{
-						var parm = parameters.Length > i && ReferenceEquals(parameters[i], sqlp) ? parameters[i] : parameters.First(p => ReferenceEquals(p, sqlp));
+						var parm = parameters.Length > i && object.ReferenceEquals(parameters[i], sqlp) ? parameters[i] : parameters.First(p => object.ReferenceEquals(p, sqlp));
 						AddParameter(parms, parm.Name, parm);
 					}
 				}
@@ -164,42 +166,53 @@ namespace LinqToDB.Data
 
 			if (pq.Commands.Length == 1)
 			{
-				InitCommand();
-			    SetCommand(pq, 0);
+				InitCommand(CommandType.Text, pq.Commands[0], null, pq.QueryHints);
+
+				if (pq.Parameters != null)
+					foreach (var p in pq.Parameters)
+						Command.Parameters.Add(p);
 
 				return ExecuteNonQuery();
 			}
-		    for (var i = 0; i < pq.Commands.Length; i++)
-		    {
-		        InitCommand();
-		        SetCommand(pq, i);
+			else
+			{
+				for (var i = 0; i < pq.Commands.Length; i++)
+				{
+					InitCommand(CommandType.Text, pq.Commands[i], null, i == 0 ? pq.QueryHints : null);
 
-		        if (i < pq.Commands.Length - 1 && pq.Commands[i].StartsWith("DROP"))
-		        {
-		            try
-		            {
-		                ExecuteNonQuery();
-		            }
-// ReSharper disable once EmptyGeneralCatchClause
-		            catch (Exception)
-		            {
-		            }
-		        }
-		        else
-		        {
-		            ExecuteNonQuery();
-		        }
-		    }
+					if (i == 0 && pq.Parameters != null)
+						foreach (var p in pq.Parameters)
+							Command.Parameters.Add(p);
 
-		    return -1;
+					if (i < pq.Commands.Length - 1 && pq.Commands[i].StartsWith("DROP"))
+					{
+						try
+						{
+							ExecuteNonQuery();
+						}
+						catch (Exception)
+						{
+						}
+					}
+					else
+					{
+						ExecuteNonQuery();
+					}
+				}
+
+				return -1;
+			}
 		}
 
 		object IDataContext.ExecuteScalar(object query)
 		{
 			var pq = (PreparedQuery)query;
 
-			InitCommand();
-		    SetCommand(pq, 0);
+			InitCommand(CommandType.Text, pq.Commands[0], null, pq.QueryHints);
+
+			if (pq.Parameters != null)
+				foreach (var p in pq.Parameters)
+					Command.Parameters.Add(p);
 
 			IDbDataParameter idparam = null;
 
@@ -236,16 +249,20 @@ namespace LinqToDB.Data
 
 			ExecuteNonQuery();
 
-            InitCommand();
-            SetCommand(pq, 1);
+			InitCommand(CommandType.Text, pq.Commands[1], null, null);
 
 			return ExecuteScalar();
 		}
 
 		IDataReader IDataContext.ExecuteReader(object query)
 		{
-            InitCommand();
-            SetCommand((PreparedQuery)query, 0);
+			var pq = (PreparedQuery)query;
+
+			InitCommand(CommandType.Text, pq.Commands[0], null, pq.QueryHints);
+
+			if (pq.Parameters != null)
+				foreach (var p in pq.Parameters)
+					Command.Parameters.Add(p);
 
 			return ExecuteReader();
 		}
@@ -278,8 +295,29 @@ namespace LinqToDB.Data
 
 			sqlProvider.PrintParameters(sb, pq.Parameters);
 
+			var isFirst = true;
+
 			foreach (var command in pq.Commands)
+			{
 				sb.AppendLine(command);
+
+				if (isFirst && pq.QueryHints != null && pq.QueryHints.Count > 0)
+				{
+					isFirst = false;
+
+					while (sb[sb.Length - 1] == '\n' || sb[sb.Length - 1] == '\r')
+						sb.Length--;
+
+					sb.AppendLine();
+
+					var sql = sb.ToString();
+
+					var sqlBuilder = DataProvider.CreateSqlBuilder();
+					sql = sqlBuilder.ApplyQueryHints(sql, pq.QueryHints);
+
+					sb = new StringBuilder(sql);
+				}
+			}
 
 			while (sb[sb.Length - 1] == '\n' || sb[sb.Length - 1] == '\r')
 				sb.Length--;
@@ -292,6 +330,7 @@ namespace LinqToDB.Data
 		#endregion
 
 		#region IDataContext Members
+
 		SqlProviderFlags IDataContext.SqlProviderFlags { get { return DataProvider.SqlProviderFlags; } }
 		Type             IDataContext.DataReaderType   { get { return DataProvider.DataReaderType;   } }
 

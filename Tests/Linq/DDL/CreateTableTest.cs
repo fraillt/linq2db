@@ -3,6 +3,7 @@ using System.Linq;
 
 using LinqToDB;
 using LinqToDB.Mapping;
+
 using NUnit.Framework;
 
 namespace Tests.DDL
@@ -149,9 +150,24 @@ namespace Tests.DDL
 			}
 		}
 
-		public class aa
+		public enum jjj
+		{
+			aa,
+			bb,
+		}
+		public class base_aa
+		{
+			public jjj dd { get; set; }
+		}
+		public class aa : base_aa
 		{
 			public int    bb { get; set; }
+			public string cc { get; set; }
+		}
+		
+		public class qq
+		{
+			public int bb { get; set; }
 			public string cc { get; set; }
 		}
 
@@ -162,25 +178,32 @@ namespace Tests.DDL
 			{
 				conn.MappingSchema.GetFluentMappingBuilder()
 					.Entity<aa>()
-					.HasTableName("aa")
-					.Property(t => t.bb).IsPrimaryKey()
-					.Property(t => t.cc)
+						.HasTableName("aa")
+						.Property(t => t.bb).IsPrimaryKey()
+						.Property(t => t.cc)
+						.Property(t => t.dd).IsNotColumn()
+					
+					.Entity<qq>()
+						.HasTableName("aa")
+						.Property(t => t.bb).IsPrimaryKey()
+						.Property(t => t.cc)
 					;
 
 				try
 				{
-					conn.DropTable<aa>();
+					conn.DropTable<qq>();
 				}
 				catch
 				{
 				}
 
-				conn.CreateTable<aa>();
+				conn.CreateTable<qq>();
 
 				conn.Insert(new aa
 				{
 					bb = 99,
-					cc = "hallo"
+					cc = "hallo",
+					dd = jjj.aa
 				});
 
 				var qq = conn.GetTable<aa>().ToList().First();
@@ -188,7 +211,7 @@ namespace Tests.DDL
 				Assert.That(qq.bb, Is.EqualTo(99));
 				Assert.That(qq.cc, Is.EqualTo("hallo"));
 
-				conn.DropTable<aa>();
+				conn.DropTable<qq>();
 			}
 		}
 	}

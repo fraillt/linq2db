@@ -103,6 +103,7 @@ namespace LinqToDB.Linq
 
 		#region Properties & Fields
 
+		public          bool              DoNotChache;
 		public          Query<T>          Next;
 		public readonly List<QueryInfo>   Queries = new List<QueryInfo>(1);
 		public          ISqlOptimizer     SqlOptimizer;
@@ -164,8 +165,11 @@ namespace LinqToDB.Linq
 							throw;
 						}
 
-						query.Next = _first;
-						_first = query;
+						if (!query.DoNotChache)
+						{
+							query.Next = _first;
+							_first = query;
+						}
 					}
 				}
 			}
@@ -244,8 +248,11 @@ namespace LinqToDB.Linq
 
 			try
 			{
-				query = SetCommand(dataContext, expr, parameters, 0);
-				return dataContext.ExecuteNonQuery(query);
+				query = SetCommand(dataContext, expr, parameters, 0, true);
+
+				var res = dataContext.ExecuteNonQuery(query);
+
+				return res;
 			}
 			finally
 			{
@@ -277,14 +284,14 @@ namespace LinqToDB.Linq
 
 			try
 			{
-				query = SetCommand(dataContext, expr, parameters, 0);
+				query = SetCommand(dataContext, expr, parameters, 0, true);
 
 				var n = dataContext.ExecuteNonQuery(query);
 
 				if (n != 0)
 					return n;
 
-				query = SetCommand(dataContext, expr, parameters, 1);
+				query = SetCommand(dataContext, expr, parameters, 1, true);
 				return dataContext.ExecuteNonQuery(query);
 			}
 			finally
@@ -321,7 +328,7 @@ namespace LinqToDB.Linq
 
 			try
 			{
-				query = SetCommand(dataContext, expr, parameters, 0);
+				query = SetCommand(dataContext, expr, parameters, 0, true);
 				return (TS)dataContext.ExecuteScalar(query);
 			}
 			finally
@@ -359,7 +366,7 @@ namespace LinqToDB.Linq
 
 			try
 			{
-				query = SetCommand(dataContext, expr, parameters, queryNumber);
+				query = SetCommand(dataContext, expr, parameters, queryNumber, true);
 
 				using (var dr = dataContext.ExecuteReader(query))
 					while (dr.Read())
@@ -375,18 +382,30 @@ namespace LinqToDB.Linq
 			}
 		}
 
-		object SetCommand(IDataContext dataContext, Expression expr, object[] parameters, int idx)
+		object SetCommand(IDataContext dataContext, Expression expr, object[] parameters, int idx, bool clearQueryHints)
 		{
 			lock (this)
 			{
 				SetParameters(expr, parameters, idx);
-				return dataContext.SetQuery(Queries[idx]);
+
+				var query = Queries[idx];
+
+				if (idx == 0 && (dataContext.QueryHints.Count > 0 || dataContext.NextQueryHints.Count > 0))
+				{
+					query.QueryHints = new List<string>(dataContext.QueryHints);
+					query.QueryHints.AddRange(dataContext.NextQueryHints);
+
+					if (clearQueryHints)
+						dataContext.NextQueryHints.Clear();
+				}
+
+				return dataContext.SetQuery(query);
 			}
 		}
 
 		ConcurrentDictionary<Type,Func<object,object>> _enumConverters;
 
-		void SetParameters(Expression expr, object[] parameters, int idx)
+		internal void SetParameters(Expression expr, object[] parameters, int idx)
 		{
 			foreach (var p in Queries[idx].Parameters)
 			{
@@ -451,7 +470,7 @@ namespace LinqToDB.Linq
 
 		public string GetSqlText(IDataContext dataContext, Expression expr, object[] parameters, int idx)
 		{
-			var query = SetCommand(dataContext, expr, parameters, 0);
+			var query = SetCommand(dataContext, expr, parameters, 0, false);
 			return dataContext.GetSqlText(query);
 		}
 
@@ -475,8 +494,9 @@ namespace LinqToDB.Linq
 				SelectQuery = new SelectQuery();
 			}
 
-			public SelectQuery SelectQuery { get; set; }
-			public object      Context     { get; set; }
+			public SelectQuery  SelectQuery { get; set; }
+			public object       Context     { get; set; }
+			public List<string> QueryHints  { get; set; }
 
 			public SqlParameter[] GetParameters()
 			{
@@ -1029,7 +1049,7 @@ namespace LinqToDB.Linq
 
 			ClearParameters();
 
-			GetElement = (ctx,db,expr,ps) => RunQuery(ctx, db,expr, ps, mapper);
+			GetElement = (ctx,db,expr,ps) => RunQuery(ctx, db, expr, ps, mapper);
 		}
 
 		TE RunQuery<TE>(
@@ -1045,7 +1065,7 @@ namespace LinqToDB.Linq
 
 			try
 			{
-				query = SetCommand(dataContext, expr, parameters, 0);
+				query = SetCommand(dataContext, expr, parameters, 0, true);
 
 				using (var dr = dataContext.ExecuteReader(query))
 					while (dr.Read())
