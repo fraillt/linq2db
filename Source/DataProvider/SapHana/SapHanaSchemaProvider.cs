@@ -10,7 +10,9 @@ namespace LinqToDB.DataProvider.SapHana
 	using Data;
 	using SchemaProvider;
 
-	class SapHanaSchemaProvider : SchemaProviderBase
+	using SqlProvider;
+
+    class SapHanaSchemaProvider : SchemaProviderBase
 	{
 		protected String               DefaultSchema;
 		protected GetHanaSchemaOptions HanaSchemaOptions;
@@ -146,7 +148,8 @@ namespace LinqToDB.DataProvider.SapHana
 				) AS combined
 				JOIN SYS.SCHEMAS AS s ON combined.SCHEMA_NAME = s.SCHEMA_NAME
 				WHERE s.HAS_PRIVILEGES = 'TRUE' 
-					AND s.SCHEMA_NAME NOT IN ('SYS', '_SYS_BI', '_SYS_REPO', '_SYS_STATISTICS')";
+					AND s.SCHEMA_NAME NOT IN ('SYS', '_SYS_BI', '_SYS_REPO', '_SYS_STATISTICS')
+                ORDER BY s.SCHEMA_NAME, IS_TABLE, TABLE_NAME";
 
 			return result;
 		}
@@ -257,6 +260,7 @@ namespace LinqToDB.DataProvider.SapHana
 					REFERENCED_COLUMN_NAME AS ""OtherColumn"",	
 					POSITION AS ""Ordinal""
 				FROM REFERENTIAL_CONSTRAINTS
+				ORDER BY SCHEMA_NAME, TABLE_NAME, POSITION
 			").ToList();
 		}
 
@@ -285,20 +289,29 @@ namespace LinqToDB.DataProvider.SapHana
 				SELECT
 					SCHEMA_NAME,
 					PROCEDURE_NAME,
-					0 AS IS_FUNCTION,
-					0 AS IS_TABLE_FUNCTION,
+					IS_FUNCTION,
+					IS_TABLE_FUNCTION,
 					DEFINITION
-				FROM PROCEDURES
-				UNION ALL
-				SELECT 
-					F.SCHEMA_NAME,
-					F.FUNCTION_NAME AS PROCEDURE_NAME,
-					1 AS IS_FUNCTION,
-					CASE WHEN FP.DATA_TYPE_NAME = 'TABLE_TYPE' THEN 1 ELSE 0 END AS IS_TABLE_FUNCTION,
-					DEFINITION	
-				FROM FUNCTIONS AS F
-				JOIN FUNCTION_PARAMETERS AS FP ON F.FUNCTION_OID = FP.FUNCTION_OID
-				WHERE FP.PARAMETER_TYPE = 'RETURN'")
+                FROM (
+                    SELECT
+					    SCHEMA_NAME,
+					    PROCEDURE_NAME,
+					    0 AS IS_FUNCTION,
+					    0 AS IS_TABLE_FUNCTION,
+					    DEFINITION
+				    FROM PROCEDURES
+				    UNION ALL
+				    SELECT 
+					    F.SCHEMA_NAME,
+					    F.FUNCTION_NAME AS PROCEDURE_NAME,
+					    1 AS IS_FUNCTION,
+					    CASE WHEN FP.DATA_TYPE_NAME = 'TABLE_TYPE' THEN 1 ELSE 0 END AS IS_TABLE_FUNCTION,
+					    DEFINITION	
+				    FROM FUNCTIONS AS F
+				    JOIN FUNCTION_PARAMETERS AS FP ON F.FUNCTION_OID = FP.FUNCTION_OID
+				    WHERE FP.PARAMETER_TYPE = 'RETURN'
+                ) AS combined
+                ORDER BY SCHEMA_NAME, IS_FUNCTION, PROCEDURE_NAME")
 			.ToList();
 		}
 
@@ -453,29 +466,19 @@ namespace LinqToDB.DataProvider.SapHana
 		protected override void LoadProcedureTableSchema(DataConnection dataConnection, ProcedureSchema procedure, string commandText,
 			List<TableSchema> tables)
 		{
-			CommandType     commandType;
-			DataParameter[] parameters;
-
+		    var commandType = CommandType.StoredProcedure;
 			if (procedure.IsTableFunction)
 			{
-				commandText = "SELECT * FROM " + commandText + "(";
-				commandText += String.Join(",", procedure.Parameters.Select(p => (
-					p.SystemType == typeof (DateTime)
-						? "'" + DateTime.Now + "'"
-						: DefaultValue.GetValue(p.SystemType)) ?? "''"));
-
-				commandText += ")";
+                var sqlBuilder = dataConnection.DataProvider.CreateSqlBuilder();
+			    commandText = String.Format("SELECT * FROM {0}({1})",
+			        commandText,
+                    String.Join(",", procedure.Parameters.Select(p => sqlBuilder.Convert(p.ParameterName, ConvertType.NameToQueryParameter))));
 				commandType = CommandType.Text;
-				parameters  = new DataParameter[0];
 			}
-			else
-			{
-				commandType = CommandType.StoredProcedure;
-				parameters = HanaSchemaOptions != null
-					? (HanaSchemaOptions.GetStoredProcedureParameters(procedure) ??
-					   GetStoredProcedureDataParameters(procedure))
-					: GetStoredProcedureDataParameters(procedure);
-			}
+		    var parameters = HanaSchemaOptions != null
+		        ? (HanaSchemaOptions.GetStoredProcedureParameters(procedure) ??
+		           GetStoredProcedureDataParameters(procedure))
+		        : GetStoredProcedureDataParameters(procedure);
 
 			try
 			{
@@ -569,19 +572,19 @@ namespace LinqToDB.DataProvider.SapHana
 					TableID = schemaName + '.' + tableName,
 					TableName = tableName
 				};
-			}, @"
-				SELECT 
+			}, @"SELECT 
 					v.SCHEMA_NAME,
 					v.VIEW_NAME AS TABLE_NAME,
 					v.COMMENTS
 				FROM SYS.VIEWS AS v
 				JOIN _SYS_BI.BIMC_ALL_CUBES AS c ON c.VIEW_NAME = v.VIEW_NAME
 				JOIN (
-					SELECT COUNT(p.CUBE_NAME) AS ParamCount, p.CUBE_NAME 
+					SELECT COUNT(p.CUBE_NAME) AS ParamCount, p.CUBE_NAME, p.CATALOG_NAME 
 					FROM _SYS_BI.BIMC_VARIABLE AS p
-					GROUP BY p.CUBE_NAME
-				) AS p ON c.CUBE_NAME = p.CUBE_NAME
-				WHERE v.VIEW_TYPE = 'CALC' AND v.IS_VALID = 'TRUE'");
+					GROUP BY p.CUBE_NAME, p.CATALOG_NAME
+				) AS p ON c.CUBE_NAME = p.CUBE_NAME AND c.CATALOG_NAME = p.CATALOG_NAME
+				WHERE v.VIEW_TYPE = 'CALC' AND v.IS_VALID = 'TRUE'
+                ORDER BY v.SCHEMA_NAME, v.VIEW_NAME");
 
 			return query.ToList();
 		}
@@ -636,8 +639,8 @@ namespace LinqToDB.DataProvider.SapHana
 					p.""ORDER""
 				FROM SYS.VIEWS AS v
 				JOIN _SYS_BI.BIMC_ALL_CUBES AS c ON c.VIEW_NAME = v.VIEW_NAME
-				JOIN _SYS_BI.BIMC_VARIABLE AS p ON c.CUBE_NAME = p.CUBE_NAME
-				WHERE c.CATALOG_NAME = p.CATALOG_NAME AND v.VIEW_TYPE = 'CALC'
+				JOIN _SYS_BI.BIMC_VARIABLE AS p ON c.CUBE_NAME = p.CUBE_NAME AND c.CATALOG_NAME = p.CATALOG_NAME
+				WHERE v.VIEW_TYPE = 'CALC'
 				ORDER BY v.VIEW_NAME, p.""ORDER""");
 
 			return query.ToList();
